@@ -1,0 +1,6 @@
+{
+  "name": "Delmas",
+  "description": "Modern atmospheric chat interface with interactive greeting, customizable toolbars, voice input, and responsive chat experience.",
+  "requestFramePermissions": ["microphone", "camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
