@@ -48,11 +48,11 @@ async function startServer() {
         })),
       ];
 
-      // Model priority list — free tier on OpenRouter (suffix :free)
+      // Model priority list — 100% free on OpenRouter
       const modelsToTry = [
-        'google/gemini-2.5-flash:free',
-        'deepseek/deepseek-chat:free',
-        'meta-llama/llama-3.3-70b-instruct:free',
+        'openrouter/free',
+        'google/gemma-4-31b-it:free',
+        'nvidia/nemotron-3-super-120b-a12b:free',
       ];
 
       let replyText = '';
