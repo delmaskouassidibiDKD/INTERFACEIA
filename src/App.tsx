@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, SetStateAction } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import Background from './components/Background';
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
@@ -7,15 +7,14 @@ import SettingsModal from './components/SettingsModal';
 import LibraryModal from './components/LibraryModal';
 import SearchModal from './components/SearchModal';
 import ChatThread, { ChatMessage } from './components/ChatThread';
-import ConstructeurWorkspace from './components/ConstructeurWorkspace';
 import Strands from './components/Strands';
-import DotField from './components/DotField';
 import { DnaLogo } from './components/DnaLogo';
 import AgentsHub from './components/AgentsHub';
 import ProfileView from './components/ProfileView';
 import BottomNav from './components/BottomNav';
 import CustomAgentView from './components/CustomAgentView';
-import { BlueRobot } from './components/BlueRobot';
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface ConstructeurProject {
   id: string;
@@ -32,570 +31,526 @@ const INITIAL_CONSTRUCTEUR_PROJECTS: ConstructeurProject[] = [
   { id: 'cp5', title: 'Composant Animé UI Motion', messages: [], updatedAt: Date.now() - 1000 },
 ];
 
+// ─── Shared API call helper ───────────────────────────────────────────────────
+
+async function callChatAPI(
+  messages: ChatMessage[],
+  opts: { webSearch: boolean; imageMode: boolean; systemInstruction: string }
+) {
+  const res = await fetch('/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      messages: messages.map((m) => ({ role: m.role, content: m.content })),
+      webSearch: opts.webSearch,
+      imageMode: opts.imageMode,
+      systemInstruction: opts.systemInstruction,
+    }),
+  });
+  return res.json();
+}
+
+// ─── App ──────────────────────────────────────────────────────────────────────
+
 export default function App() {
+  // ═══════════════════════════════════════════════════════════════════════════
+  // TOP-LEVEL TAB  (navigation only – no chat state shared here)
+  // ═══════════════════════════════════════════════════════════════════════════
   const [activeTab, setActiveTab] = useState<'hub' | 'chat' | 'constructeur' | 'profile'>('hub');
-  const [mode, setMode] = useState<'chat' | 'constructeur'>('chat');
-  const [agentMessagesMap, setAgentMessagesMap] = useState<Record<string, ChatMessage[]>>({});
-  const [agentInputMap, setAgentInputMap] = useState<Record<string, string>>({});
-  const [constructeurProjects, setConstructeurProjects] = useState<ConstructeurProject[]>(INITIAL_CONSTRUCTEUR_PROJECTS);
-  const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [webSearch, setWebSearch] = useState(false);
-  const [imageMode, setImageMode] = useState(false);
-  const [systemInstruction, setSystemInstruction] = useState(
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SECTION 1 — HUB  (agents list, no chat state)
+  // ═══════════════════════════════════════════════════════════════════════════
+  const [hubSidebarOpen, setHubSidebarOpen] = useState(false);
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SECTION 2 — DELMAS AI CHAT  (orange DNA robot + custom agents from Hub)
+  // ═══════════════════════════════════════════════════════════════════════════
+  const [chatMessagesMap, setChatMessagesMap] = useState<Record<string, ChatMessage[]>>({});
+  const [chatInputMap, setChatInputMap]       = useState<Record<string, string>>({});
+  const [chatActiveName, setChatActiveName]   = useState('Delmas AI');
+  const [chatWebSearch, setChatWebSearch]     = useState(false);
+  const [chatImageMode, setChatImageMode]     = useState(false);
+  const [chatSystemInstruction, setChatSystemInstruction] = useState(
     "Tu es Delmas, un assistant intelligent, amical et concis."
   );
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isLibraryOpen, setIsLibraryOpen] = useState(false);
-  const [isSearchOpen, setIsSearchOpen] = useState(false);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [activeChatTitle, setActiveChatTitle] = useState<string | null>(null);
-  const [chatAttachedFilesState, setChatAttachedFilesState] = useState<File[]>([]);
-  const [constructeurAttachedFilesState, setConstructeurAttachedFilesState] = useState<File[]>([]);
-  const [isInputFocused, setIsInputFocused] = useState(false);
-  const [canScrollDown, setCanScrollDown] = useState(false);
-  const scrollToBottomRef = useRef<(() => void) | null>(null);
+  const [chatAttachedFiles, setChatAttachedFilesRaw] = useState<File[]>([]);
+  const [chatLoading, setChatLoading]         = useState(false);
+  const [chatSidebarOpen, setChatSidebarOpen] = useState(false);
+  const [chatSettingsOpen, setChatSettingsOpen] = useState(false);
+  const [chatLibraryOpen, setChatLibraryOpen] = useState(false);
+  const [chatSearchOpen, setChatSearchOpen]   = useState(false);
+  const [chatCanScroll, setChatCanScroll]     = useState(false);
+  const chatScrollFn = useRef<(() => void) | null>(null);
 
-  const activeAgentKey = activeTab === 'constructeur'
-    ? (activeChatTitle || "Agent Delmas")
-    : (activeChatTitle || 'Delmas AI');
+  const chatMessages = chatMessagesMap[chatActiveName] || [];
+  const chatInput    = chatInputMap[chatActiveName] || '';
 
-  const activeMessages = agentMessagesMap[activeAgentKey] || [];
-  const activeInputMessage = agentInputMap[activeAgentKey] || '';
+  const setChatInput = useCallback((val: string) => {
+    setChatInputMap((p) => ({ ...p, [chatActiveName]: val }));
+  }, [chatActiveName]);
 
-  const setActiveInputMessage = useCallback((val: string) => {
-    setAgentInputMap((prev) => ({
-      ...prev,
-      [activeAgentKey]: val,
-    }));
-  }, [activeAgentKey]);
-
-  const handleScrollStateChange = useCallback((show: boolean, scrollFn: () => void) => {
-    setCanScrollDown(show);
-    scrollToBottomRef.current = scrollFn;
+  const setChatAttachedFiles = useCallback((action: React.SetStateAction<File[]>) => {
+    setChatAttachedFilesRaw((p) => {
+      const n = typeof action === 'function' ? action(p) : action;
+      return n.length > 10 ? n.slice(0, 10) : n;
+    });
   }, []);
 
-  // Custom setChatAttachedFiles with validation ensuring max 10 elements
-  const setChatAttachedFiles = useCallback(
-    (action: React.SetStateAction<File[]>) => {
-      setChatAttachedFilesState((prev) => {
-        const next = typeof action === 'function' ? action(prev) : action;
-        if (next.length > 10) return next.slice(0, 10);
-        return next;
-      });
-    },
-    []
-  );
+  const handleChatSend = async (text: string) => {
+    const files = chatAttachedFiles;
+    if (!text.trim() && files.length === 0) return;
 
-  // Custom setConstructeurAttachedFiles with validation ensuring max 10 elements
-  const setConstructeurAttachedFiles = useCallback(
-    (action: React.SetStateAction<File[]>) => {
-      setConstructeurAttachedFilesState((prev) => {
-        const next = typeof action === 'function' ? action(prev) : action;
-        if (next.length > 10) return next.slice(0, 10);
-        return next;
-      });
-    },
-    []
-  );
+    let prompt = text;
+    if (files.length > 0) prompt += `\n[Fichiers joints (${files.length}): ${files.map((f) => f.name).join(', ')}]`;
 
-  const handleSendMessage = async (textToSend: string) => {
-    const isConstructeur = activeTab === 'constructeur' || mode === 'constructeur';
-    const targetAgentKey = activeAgentKey;
-    const currentFiles = isConstructeur ? constructeurAttachedFilesState : chatAttachedFilesState;
-    if (!textToSend.trim() && currentFiles.length === 0) return;
+    const userMsg: ChatMessage = { id: Date.now().toString(), role: 'user', content: prompt, timestamp: new Date() };
+    const name   = chatActiveName;
+    const prev   = chatMessagesMap[name] || [];
+    const msgs   = [...prev, userMsg];
 
-    let fullPrompt = textToSend;
-    if (currentFiles.length > 0) {
-      const fileNames = currentFiles.map((f) => f.name).join(', ');
-      fullPrompt += `\n[Fichiers joints (${currentFiles.length}): ${fileNames}]`;
-    }
-
-    const userMsg: ChatMessage = {
-      id: Date.now().toString(),
-      role: 'user',
-      content: fullPrompt,
-      timestamp: new Date(),
-    };
-
-    const currentMsgList = agentMessagesMap[targetAgentKey] || [];
-    const newMessages = [...currentMsgList, userMsg];
-
-    setAgentMessagesMap((prev) => ({
-      ...prev,
-      [targetAgentKey]: newMessages,
-    }));
-
-    setAgentInputMap((prev) => ({
-      ...prev,
-      [targetAgentKey]: '',
-    }));
-
-    if (isConstructeur) {
-      setConstructeurAttachedFilesState([]);
-    } else {
-      setChatAttachedFilesState([]);
-    }
-
-    setIsLoading(true);
-
-    let activeProjectId = currentProjectId;
-
-    // In Constructeur mode, create or update project in "Vos Projets"
-    if (isConstructeur) {
-      if (!activeProjectId) {
-        activeProjectId = 'proj_' + Date.now();
-        let rawTitle = textToSend.replace(/^[^\s]+\s*:\s*/, '').trim() || 'Nouveau Projet';
-        if (rawTitle.length > 38) {
-          rawTitle = rawTitle.slice(0, 38) + '...';
-        }
-        const newProj: ConstructeurProject = {
-          id: activeProjectId,
-          title: rawTitle,
-          messages: newMessages,
-          updatedAt: Date.now(),
-        };
-        setConstructeurProjects((prev) => [newProj, ...prev]);
-        setCurrentProjectId(activeProjectId);
-        setActiveChatTitle(rawTitle);
-      } else {
-        setConstructeurProjects((prev) =>
-          prev.map((p) =>
-            p.id === activeProjectId
-              ? { ...p, messages: newMessages, updatedAt: Date.now() }
-              : p
-          )
-        );
-      }
-    }
-
-    const activeSystemInstruction = isConstructeur
-      ? "Tu es Agent Delmas, un expert senior en développement de sites web, création d'applications web/mobile, design UI/UX et architecture logicielle. Fournis du code propre, moderne et structuré."
-      : `Tu es ${targetAgentKey}, un assistant IA spécialisé. ${systemInstruction}`;
+    setChatMessagesMap((m) => ({ ...m, [name]: msgs }));
+    setChatInputMap((m)    => ({ ...m, [name]: '' }));
+    setChatAttachedFilesRaw([]);
+    setChatLoading(true);
 
     try {
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: newMessages.map((m) => ({ role: m.role, content: m.content })),
-          webSearch,
-          imageMode,
-          systemInstruction: activeSystemInstruction,
-        }),
+      const data = await callChatAPI(msgs, {
+        webSearch: chatWebSearch,
+        imageMode: chatImageMode,
+        systemInstruction: `Tu es ${name}, un assistant IA spécialisé. ${chatSystemInstruction}`,
       });
-
-      const data = await response.json();
-
       const aiMsg: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
+        id: (Date.now() + 1).toString(), role: 'assistant',
         content: data.text || "Désolé, une erreur s'est produite.",
-        sources: data.sources || [],
-        timestamp: new Date(),
+        sources: data.sources || [], timestamp: new Date(),
       };
-
-      setAgentMessagesMap((prev) => {
-        const existing = prev[targetAgentKey] || [];
-        const updated = [...existing, aiMsg];
-        if (isConstructeur && activeProjectId) {
-          setConstructeurProjects((pList) =>
-            pList.map((p) =>
-              p.id === activeProjectId ? { ...p, messages: updated, updatedAt: Date.now() } : p
-            )
-          );
-        }
-        return {
-          ...prev,
-          [targetAgentKey]: updated,
-        };
-      });
-    } catch (err) {
-      console.error('Failed to send message:', err);
-      const errorMsg: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: "Désolé, je ne peux pas me connecter au serveur pour le moment.",
-        timestamp: new Date(),
+      setChatMessagesMap((m) => ({ ...m, [name]: [...(m[name] || []), aiMsg] }));
+    } catch {
+      const errMsg: ChatMessage = {
+        id: (Date.now() + 1).toString(), role: 'assistant',
+        content: "Désolé, je ne peux pas me connecter au serveur.", timestamp: new Date(),
       };
-      setAgentMessagesMap((prev) => {
-        const existing = prev[targetAgentKey] || [];
-        const updated = [...existing, errorMsg];
-        if (isConstructeur && activeProjectId) {
-          setConstructeurProjects((pList) =>
-            pList.map((p) =>
-              p.id === activeProjectId ? { ...p, messages: updated, updatedAt: Date.now() } : p
-            )
-          );
-        }
-        return {
-          ...prev,
-          [targetAgentKey]: updated,
-        };
-      });
+      setChatMessagesMap((m) => ({ ...m, [name]: [...(m[name] || []), errMsg] }));
     } finally {
-      setIsLoading(false);
+      setChatLoading(false);
     }
   };
 
-  const handleNewChat = () => {
-    setAgentMessagesMap((prev) => ({
-      ...prev,
-      [activeAgentKey]: [],
-    }));
-    setAgentInputMap((prev) => ({
-      ...prev,
-      [activeAgentKey]: '',
-    }));
-    setChatAttachedFiles([]);
-    setMode('chat');
-    setActiveTab('chat');
-    setIsSidebarOpen(false);
+  const handleChatNewChat = () => {
+    setChatActiveName('Delmas AI');
+    setChatAttachedFilesRaw([]);
+    setChatSidebarOpen(false);
   };
 
-  const handleOpenChat = (agentName?: string, options?: { webSearch?: boolean; imageMode?: boolean }) => {
-    if (options?.webSearch !== undefined) setWebSearch(options.webSearch);
-    if (options?.imageMode !== undefined) setImageMode(options.imageMode);
-    if (agentName) setActiveChatTitle(agentName);
-    setMode('chat');
-    setActiveTab('chat');
-    setIsSidebarOpen(false);
+  const handleChatSelectTopic = (title: string) => {
+    setChatSidebarOpen(false);
+    if (title === 'Bibliothèque') { setChatLibraryOpen(true); return; }
+    setChatActiveName(title);
   };
 
-  const handleOpenConstructeur = () => {
+  const handleChatScrollState = useCallback((show: boolean, fn: () => void) => {
+    setChatCanScroll(show);
+    chatScrollFn.current = fn;
+  }, []);
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SECTION 3 — AGENT DELMAS / CONSTRUCTEUR
+  // ═══════════════════════════════════════════════════════════════════════════
+  const [agentMsgsMap, setAgentMsgsMap]           = useState<Record<string, ChatMessage[]>>({});
+  const [agentInputMap, setAgentInputMap]         = useState<Record<string, string>>({});
+  const [constructeurProjects, setConstructeurProjects] = useState<ConstructeurProject[]>(INITIAL_CONSTRUCTEUR_PROJECTS);
+  const [currentProjectId, setCurrentProjectId]   = useState<string | null>(null);
+  const [agentWebSearch, setAgentWebSearch]       = useState(false);
+  const [agentImageMode, setAgentImageMode]       = useState(false);
+  const [agentSystemInstruction, setAgentSystemInstruction] = useState(
+    "Tu es Agent Delmas, un expert senior en développement de sites web, création d'applications web/mobile, design UI/UX et architecture logicielle. Fournis du code propre, moderne et structuré."
+  );
+  const [agentAttachedFiles, setAgentAttachedFilesRaw] = useState<File[]>([]);
+  const [agentLoading, setAgentLoading]           = useState(false);
+  const [agentSidebarOpen, setAgentSidebarOpen]   = useState(false);
+  const [agentSettingsOpen, setAgentSettingsOpen] = useState(false);
+
+  const agentKey     = currentProjectId || 'default';
+  const agentMessages = agentMsgsMap[agentKey] || [];
+  const agentInput   = agentInputMap[agentKey] || '';
+  const agentTitle   = currentProjectId
+    ? (constructeurProjects.find((p) => p.id === currentProjectId)?.title || 'Agent Delmas')
+    : 'Agent Delmas';
+
+  const setAgentInput = useCallback((val: string) => {
+    setAgentInputMap((p) => ({ ...p, [agentKey]: val }));
+  }, [agentKey]);
+
+  const setAgentAttachedFiles = useCallback((action: React.SetStateAction<File[]>) => {
+    setAgentAttachedFilesRaw((p) => {
+      const n = typeof action === 'function' ? action(p) : action;
+      return n.length > 10 ? n.slice(0, 10) : n;
+    });
+  }, []);
+
+  const handleAgentSend = async (text: string) => {
+    const files = agentAttachedFiles;
+    if (!text.trim() && files.length === 0) return;
+
+    let prompt = text;
+    if (files.length > 0) prompt += `\n[Fichiers joints (${files.length}): ${files.map((f) => f.name).join(', ')}]`;
+
+    const userMsg: ChatMessage = { id: Date.now().toString(), role: 'user', content: prompt, timestamp: new Date() };
+
+    // Create project on first message if none selected
+    let pid = currentProjectId;
+    if (!pid) {
+      pid = 'proj_' + Date.now();
+      let title = text.replace(/^[^\s]+\s*:\s*/, '').trim() || 'Nouveau Projet';
+      if (title.length > 38) title = title.slice(0, 38) + '...';
+      setConstructeurProjects((prev) => [{ id: pid!, title, messages: [], updatedAt: Date.now() }, ...prev]);
+      setCurrentProjectId(pid);
+    }
+
+    const activeKey = pid;
+    const prev      = agentMsgsMap[activeKey] || [];
+    const msgs      = [...prev, userMsg];
+
+    setAgentMsgsMap((m)   => ({ ...m, [activeKey]: msgs }));
+    setAgentInputMap((m)  => ({ ...m, [agentKey]: '' }));
+    setAgentAttachedFilesRaw([]);
+    setAgentLoading(true);
+
+    try {
+      const data = await callChatAPI(msgs, {
+        webSearch: agentWebSearch,
+        imageMode: agentImageMode,
+        systemInstruction: agentSystemInstruction,
+      });
+      const aiMsg: ChatMessage = {
+        id: (Date.now() + 1).toString(), role: 'assistant',
+        content: data.text || "Désolé, une erreur s'est produite.",
+        sources: data.sources || [], timestamp: new Date(),
+      };
+      setAgentMsgsMap((m) => ({ ...m, [activeKey]: [...(m[activeKey] || []), aiMsg] }));
+    } catch {
+      const errMsg: ChatMessage = {
+        id: (Date.now() + 1).toString(), role: 'assistant',
+        content: "Désolé, je ne peux pas me connecter au serveur.", timestamp: new Date(),
+      };
+      setAgentMsgsMap((m) => ({ ...m, [activeKey]: [...(m[activeKey] || []), errMsg] }));
+    } finally {
+      setAgentLoading(false);
+    }
+  };
+
+  const handleAgentNewProject = () => {
     setCurrentProjectId(null);
-    setActiveChatTitle("Agent Delmas");
-    setConstructeurAttachedFiles([]);
-    setMode('constructeur');
+    setAgentAttachedFilesRaw([]);
+    setAgentSidebarOpen(false);
+  };
+
+  const handleAgentSelectProject = (title: string, projectId?: string) => {
+    setAgentSidebarOpen(false);
+    if (!projectId) return;
+    const project = constructeurProjects.find((p) => p.id === projectId);
+    if (!project) return;
+    setCurrentProjectId(projectId);
+    // Load project messages into the map if not already there
+    setAgentMsgsMap((m) => ({ ...m, [projectId]: project.messages }));
+  };
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SECTION 4 — PROFILE  (own settings, own toggles, isolated)
+  // ═══════════════════════════════════════════════════════════════════════════
+  const [profileWebSearch, setProfileWebSearch]   = useState(false);
+  const [profileImageMode, setProfileImageMode]   = useState(false);
+  const [profileSystemInstruction, setProfileSystemInstruction] = useState(
+    "Tu es Delmas, un assistant intelligent, amical et concis."
+  );
+  const [profileSettingsOpen, setProfileSettingsOpen] = useState(false);
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // NAV HELPERS
+  // ═══════════════════════════════════════════════════════════════════════════
+  const openChatFromHub = (agentName?: string, options?: { webSearch?: boolean; imageMode?: boolean }) => {
+    if (agentName) setChatActiveName(agentName);
+    if (options?.webSearch  !== undefined) setChatWebSearch(options.webSearch);
+    if (options?.imageMode  !== undefined) setChatImageMode(options.imageMode);
+    setActiveTab('chat');
+  };
+
+  const openConstructeurFromHub = () => {
+    setCurrentProjectId(null);
+    setAgentAttachedFilesRaw([]);
     setActiveTab('constructeur');
-    setIsSidebarOpen(false);
   };
 
-  const handleExitConstructeur = () => {
-    if (currentProjectId) {
-      const msgs = agentMessagesMap[activeAgentKey] || [];
-      setConstructeurProjects((prev) =>
-        prev.map((p) =>
-          p.id === currentProjectId ? { ...p, messages: msgs, updatedAt: Date.now() } : p
-        )
-      );
-    }
-    setCurrentProjectId(null);
-    setConstructeurAttachedFiles([]);
-    setMode('chat');
-    setActiveTab('hub');
-    setIsSidebarOpen(false);
-  };
-
-  const handleClearHistory = () => {
-    setAgentMessagesMap({});
-    setAgentInputMap({});
-    setActiveChatTitle(null);
-    setCurrentProjectId(null);
-  };
-
-  const handleSelectChatTopic = (title: string, projectId?: string) => {
-    setIsSidebarOpen(false);
-    setActiveChatTitle(title);
-    if (title === 'Bibliothèque') {
-      setIsLibraryOpen(true);
-      return;
-    }
-    if (title === 'Constructeur') {
-      handleOpenConstructeur();
-      return;
-    }
-
-    // Check if it's a project in constructeurProjects
-    const targetProject = constructeurProjects.find(
-      (p) => (projectId && p.id === projectId) || p.title === title
-    );
-
-    if (targetProject) {
-      setMode('constructeur');
-      setActiveTab('constructeur');
-      setCurrentProjectId(targetProject.id);
-      setActiveChatTitle(targetProject.title);
-      setAgentMessagesMap((prev) => ({
-        ...prev,
-        [targetProject.title]: targetProject.messages,
-      }));
-      return;
-    }
-
-    // Standard chat topic
-    setMode('chat');
-    setActiveTab('chat');
-    const existing = agentMessagesMap[title];
-    if (!existing || existing.length === 0) {
-      handleSendMessage(title);
-    }
-  };
-
-  const isConstructeurThreadActive =
-    activeTab === 'constructeur' && (currentProjectId !== null || activeMessages.length > 0);
-  const isChatThreadActive = activeMessages.length > 0;
-  const isCustomAgentChat =
-    activeTab === 'chat' &&
-    Boolean(activeChatTitle) &&
-    activeChatTitle !== 'Delmas AI' &&
-    activeChatTitle !== 'Delmas AI Hub' &&
-    activeChatTitle !== 'Delmas';
+  // ═══════════════════════════════════════════════════════════════════════════
+  // RENDER
+  // ═══════════════════════════════════════════════════════════════════════════
+  const isCustomAgentChat   = activeTab === 'chat' && chatActiveName !== 'Delmas AI';
+  const chatHasMessages     = chatMessages.length > 0;
 
   return (
     <div className="relative min-h-screen w-full flex flex-col justify-between overflow-hidden bg-[#0b0f19] text-slate-100 font-sans antialiased">
-      {/* Background fixed layers */}
       <Background />
 
-      {/* Top Header - shown during Delmas AI main chat view */}
-      {activeTab === 'chat' && !isCustomAgentChat && (
-        <Header
-          onOpenMenu={() => setIsSidebarOpen(true)}
-          onNewChat={handleNewChat}
-          onOpenConstructeur={handleOpenConstructeur}
-          onExitConstructeur={handleExitConstructeur}
-          onBackToHub={() => {
-            setActiveTab('hub');
-            setMode('chat');
-            setIsSidebarOpen(false);
-          }}
-          isConstructeurMode={false}
-        />
+      {/* ───────────────────────── HUB ───────────────────────────────────── */}
+      {activeTab === 'hub' && (
+        <>
+          <Sidebar
+            isOpen={hubSidebarOpen}
+            onClose={() => setHubSidebarOpen(false)}
+            onSelectChat={(title) => { setHubSidebarOpen(false); openChatFromHub(title); }}
+            onNewChat={() => { setHubSidebarOpen(false); openChatFromHub('Delmas AI'); }}
+            onOpenSettings={() => setHubSidebarOpen(false)}
+            activeChatTitle={null}
+            isConstructeurMode={false}
+          />
+          <AgentsHub
+            onOpenChat={openChatFromHub}
+            onOpenConstructeur={openConstructeurFromHub}
+            onOpenMenu={() => setHubSidebarOpen(true)}
+          />
+        </>
       )}
 
+      {/* ───────────────────── DELMAS AI CHAT ───────────────────────────── */}
+      {activeTab === 'chat' && (
+        <>
+          {/* Own sidebar for Chat section */}
+          <Sidebar
+            isOpen={chatSidebarOpen}
+            onClose={() => setChatSidebarOpen(false)}
+            onSelectChat={handleChatSelectTopic}
+            onNewChat={handleChatNewChat}
+            onOpenSettings={() => { setChatSidebarOpen(false); setChatSettingsOpen(true); }}
+            onOpenSearch={() => { setChatSidebarOpen(false); setChatSearchOpen(true); }}
+            activeChatTitle={chatActiveName}
+            isConstructeurMode={false}
+          />
 
+          {/* Own modals for Chat section */}
+          <SettingsModal
+            isOpen={chatSettingsOpen}
+            onClose={() => setChatSettingsOpen(false)}
+            systemInstruction={chatSystemInstruction}
+            setSystemInstruction={setChatSystemInstruction}
+            webSearch={chatWebSearch}
+            setWebSearch={setChatWebSearch}
+            imageMode={chatImageMode}
+            setImageMode={setChatImageMode}
+          />
+          <LibraryModal isOpen={chatLibraryOpen} onClose={() => setChatLibraryOpen(false)} />
+          <SearchModal
+            isOpen={chatSearchOpen}
+            onClose={() => setChatSearchOpen(false)}
+            onSelectChat={handleChatSelectTopic}
+          />
 
-      {/* Left Drawer Sidebar */}
-      <Sidebar
-        isOpen={isSidebarOpen}
-        onClose={() => setIsSidebarOpen(false)}
-        onSelectChat={handleSelectChatTopic}
-        onNewChat={handleNewChat}
-        onOpenSettings={() => setIsSettingsOpen(true)}
-        onOpenSearch={() => setIsSearchOpen(true)}
-        activeChatTitle={activeChatTitle}
-        isConstructeurMode={activeTab === 'constructeur'}
-        onOpenConstructeur={handleOpenConstructeur}
-        onExitConstructeur={handleExitConstructeur}
-        constructeurProjects={constructeurProjects}
-      />
-
-      {/* Settings Dialog Modal */}
-      <SettingsModal
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-        systemInstruction={systemInstruction}
-        setSystemInstruction={setSystemInstruction}
-        webSearch={webSearch}
-        setWebSearch={setWebSearch}
-        imageMode={imageMode}
-        setImageMode={setImageMode}
-      />
-
-      {/* Library View Modal */}
-      <LibraryModal
-        isOpen={isLibraryOpen}
-        onClose={() => setIsLibraryOpen(false)}
-      />
-
-      {/* Search View Modal */}
-      <SearchModal
-        isOpen={isSearchOpen}
-        onClose={() => setIsSearchOpen(false)}
-        onSelectChat={handleSelectChatTopic}
-      />
-
-      {/* MAIN CONTENT VIEW BASED ON ACTIVE TAB */}
-      {activeTab === 'hub' ? (
-        <AgentsHub
-          onOpenChat={handleOpenChat}
-          onOpenConstructeur={handleOpenConstructeur}
-          onOpenMenu={() => setIsSidebarOpen(true)}
-        />
-      ) : activeTab === 'profile' ? (
-        <ProfileView
-          onOpenSettings={() => setIsSettingsOpen(true)}
-          webSearch={webSearch}
-          setWebSearch={setWebSearch}
-          imageMode={imageMode}
-          setImageMode={setImageMode}
-          onClearHistory={handleClearHistory}
-          systemInstruction={systemInstruction}
-        />
-      ) : activeTab === 'constructeur' ? (
-        /* CONSTRUCTEUR / AGENT DELMAS VIEW */
-        <CustomAgentView
-          agentName={activeChatTitle || "Agent Delmas"}
-          userName="DIBI Kouassi delmas..."
-          messages={activeMessages}
-          isLoading={isLoading}
-          inputMessage={activeInputMessage}
-          setInputMessage={setActiveInputMessage}
-          onSend={handleSendMessage}
-          onOpenMenu={() => setIsSidebarOpen(true)}
-          onBackToHub={() => {
-            setActiveTab('hub');
-            setMode('chat');
-            setIsSidebarOpen(false);
-          }}
-          onNewChat={handleNewChat}
-          webSearch={webSearch}
-          setWebSearch={setWebSearch}
-          imageMode={imageMode}
-          setImageMode={setImageMode}
-          onOpenSettings={() => setIsSettingsOpen(true)}
-          attachedFiles={constructeurAttachedFilesState}
-          setAttachedFiles={setConstructeurAttachedFiles}
-        />
-      ) : isCustomAgentChat ? (
-        /* DEDICATED CUSTOM AGENT VIEW WITH BLUE ROBOT & TOP HEADER BUTTONS */
-        <CustomAgentView
-          agentName={activeChatTitle!}
-          userName="DIBI Kouassi delmas..."
-          messages={activeMessages}
-          isLoading={isLoading}
-          inputMessage={activeInputMessage}
-          setInputMessage={setActiveInputMessage}
-          onSend={handleSendMessage}
-          onOpenMenu={() => setIsSidebarOpen(true)}
-          onBackToHub={() => {
-            setActiveTab('hub');
-            setMode('chat');
-            setIsSidebarOpen(false);
-          }}
-          onNewChat={handleNewChat}
-          webSearch={webSearch}
-          setWebSearch={setWebSearch}
-          imageMode={imageMode}
-          setImageMode={setImageMode}
-          onOpenSettings={() => setIsSettingsOpen(true)}
-          attachedFiles={chatAttachedFilesState}
-          setAttachedFiles={setChatAttachedFiles}
-        />
-      ) : (
-        /* CHAT VIEW (Delmas AI Main Robot) */
-        !isChatThreadActive ? (
-          // STANDARD DELMAS AI LANDING VIEW WITH ANIMATED COLORS
-          <main className="relative z-10 flex-1 flex flex-col items-center justify-between pb-2 px-3 pt-12 min-h-screen overflow-hidden">
-            <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden flex items-center justify-center">
-              <div style={{ width: '100%', height: '100%', position: 'relative' }}>
-                <Strands
-                  colors={["#F97316","#7C3AED","#06B6D4"]}
-                  count={3}
-                  speed={0.4}
-                  amplitude={0.95}
-                  waviness={0.95}
-                  thickness={0.6}
-                  glow={2.0}
-                  taper={3}
-                  spread={1}
-                  intensity={0.48}
-                  saturation={1.4}
-                  opacity={0.78}
-                  scale={1.5}
-                  glass={false}
-                  refraction={1}
-                  dispersion={1}
-                  glassSize={1}
-                  hueShift={0}
-                />
-              </div>
-            </div>
-
-            <div className="relative z-10 my-auto flex flex-col items-center text-center">
-              <div className="relative mb-5 flex items-center justify-center">
-                <div className="absolute inset-0 bg-amber-500/20 blur-xl rounded-full scale-150 animate-pulse pointer-events-none" />
-                <DnaLogo className="w-12 h-12 sm:w-14 sm:h-14 relative z-10 text-amber-400 drop-shadow-[0_0_18px_rgba(243,128,32,0.7)]" glow={true} />
-              </div>
-
-              <h1 className="text-2xl sm:text-3xl md:text-4xl font-normal text-white/95 tracking-tight">
-                {activeChatTitle && activeChatTitle !== 'Delmas AI' && activeChatTitle !== 'Delmas AI Hub'
-                  ? activeChatTitle
-                  : "Comment puis-je vous aider ?"}
-              </h1>
-            </div>
-
-            <div className="chat-container relative z-10 flex flex-col justify-end w-full max-w-[820px] mb-1 sm:mb-2">
-              <ChatBox
-                variant="compact"
-                inputMessage={activeInputMessage}
-                setInputMessage={setActiveInputMessage}
-                onSend={handleSendMessage}
-                webSearch={webSearch}
-                setWebSearch={setWebSearch}
-                imageMode={imageMode}
-                setImageMode={setImageMode}
-                onOpenSettings={() => setIsSettingsOpen(true)}
-                attachedFiles={chatAttachedFilesState}
-                setAttachedFiles={setChatAttachedFiles}
-                onFocus={() => setIsInputFocused(true)}
-                onBlur={() => setTimeout(() => setIsInputFocused(false), 150)}
-              />
-            </div>
-          </main>
-        ) : (
-          // ACTIVE DELMAS AI CHAT THREAD VIEW
-          <main className="relative z-10 flex-1 flex flex-col pt-10 pb-24 justify-between">
-            <ChatThread
-              messages={activeMessages}
-              isLoading={isLoading}
-              onNewChat={handleNewChat}
-              onScrollStateChange={handleScrollStateChange}
+          {/* Custom agent (blue robot agents) */}
+          {isCustomAgentChat ? (
+            <CustomAgentView
+              agentName={chatActiveName}
+              userName="DIBI Kouassi delmas..."
+              messages={chatMessages}
+              isLoading={chatLoading}
+              inputMessage={chatInput}
+              setInputMessage={setChatInput}
+              onSend={handleChatSend}
+              onOpenMenu={() => setChatSidebarOpen(true)}
+              onBackToHub={() => setActiveTab('hub')}
+              onNewChat={handleChatNewChat}
+              webSearch={chatWebSearch}
+              setWebSearch={setChatWebSearch}
+              imageMode={chatImageMode}
+              setImageMode={setChatImageMode}
+              onOpenSettings={() => setChatSettingsOpen(true)}
+              attachedFiles={chatAttachedFiles}
+              setAttachedFiles={setChatAttachedFiles}
             />
+          ) : (
+            /* Main Delmas AI (orange DNA robot) */
+            <>
+              <Header
+                onOpenMenu={() => setChatSidebarOpen(true)}
+                onNewChat={handleChatNewChat}
+                onOpenConstructeur={openConstructeurFromHub}
+                onExitConstructeur={() => setActiveTab('hub')}
+                onBackToHub={() => setActiveTab('hub')}
+                isConstructeurMode={false}
+              />
 
-            <div className="fixed bottom-2 sm:bottom-3 left-0 right-0 z-20 px-2 sm:px-4 flex justify-center">
-              <div className="w-full max-w-[820px] relative">
-                <button
-                  type="button"
-                  onClick={() => scrollToBottomRef.current?.()}
-                  className={`absolute -top-13 right-2 sm:right-4 z-30 flex items-center justify-center w-10 h-10 rounded-full bg-[#1e2736]/90 hover:bg-[#2b384d] border border-slate-700/80 text-amber-400 hover:text-amber-300 shadow-2xl backdrop-blur-md transition-all duration-300 ease-out active:scale-90 ${
-                    canScrollDown
-                      ? 'opacity-100 translate-y-0 pointer-events-auto scale-100'
-                      : 'opacity-0 translate-y-2 pointer-events-none scale-90'
-                  }`}
-                  aria-label="Défiler vers le bas"
-                  title="Défiler vers le bas"
-                >
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                    <line x1="12" y1="5" x2="12" y2="19" />
-                    <polyline points="19 12 12 19 5 12" />
-                  </svg>
-                </button>
+              {!chatHasMessages ? (
+                /* Landing — no messages yet */
+                <main className="relative z-10 flex-1 flex flex-col items-center justify-between pb-2 px-3 pt-12 min-h-screen overflow-hidden">
+                  <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden flex items-center justify-center">
+                    <div style={{ width: '100%', height: '100%', position: 'relative' }}>
+                      <Strands
+                        colors={["#F97316","#7C3AED","#06B6D4"]}
+                        count={3} speed={0.4} amplitude={0.95} waviness={0.95}
+                        thickness={0.6} glow={2.0} taper={3} spread={1}
+                        intensity={0.48} saturation={1.4} opacity={0.78}
+                        scale={1.5} glass={false} refraction={1} dispersion={1}
+                        glassSize={1} hueShift={0}
+                      />
+                    </div>
+                  </div>
 
-                <ChatBox
-                  variant="compact"
-                  inputMessage={activeInputMessage}
-                  setInputMessage={setActiveInputMessage}
-                  onSend={handleSendMessage}
-                  webSearch={webSearch}
-                  setWebSearch={setWebSearch}
-                  imageMode={imageMode}
-                  setImageMode={setImageMode}
-                  onOpenSettings={() => setIsSettingsOpen(true)}
-                  attachedFiles={chatAttachedFilesState}
-                  setAttachedFiles={setChatAttachedFiles}
-                />
-              </div>
-            </div>
-          </main>
-        )
+                  <div className="relative z-10 my-auto flex flex-col items-center text-center">
+                    <div className="relative mb-5 flex items-center justify-center">
+                      <div className="absolute inset-0 bg-amber-500/20 blur-xl rounded-full scale-150 animate-pulse pointer-events-none" />
+                      <DnaLogo
+                        className="w-12 h-12 sm:w-14 sm:h-14 relative z-10 text-amber-400 drop-shadow-[0_0_18px_rgba(243,128,32,0.7)]"
+                        glow={true}
+                      />
+                    </div>
+                    <h1 className="text-2xl sm:text-3xl md:text-4xl font-normal text-white/95 tracking-tight">
+                      Comment puis-je vous aider ?
+                    </h1>
+                  </div>
+
+                  <div className="chat-container relative z-10 flex flex-col justify-end w-full max-w-[820px] mb-1 sm:mb-2">
+                    <ChatBox
+                      variant="compact"
+                      inputMessage={chatInput}
+                      setInputMessage={setChatInput}
+                      onSend={handleChatSend}
+                      webSearch={chatWebSearch}
+                      setWebSearch={setChatWebSearch}
+                      imageMode={chatImageMode}
+                      setImageMode={setChatImageMode}
+                      onOpenSettings={() => setChatSettingsOpen(true)}
+                      attachedFiles={chatAttachedFiles}
+                      setAttachedFiles={setChatAttachedFiles}
+                    />
+                  </div>
+                </main>
+              ) : (
+                /* Active chat thread */
+                <main className="relative z-10 flex-1 flex flex-col pt-10 pb-24 justify-between">
+                  <ChatThread
+                    messages={chatMessages}
+                    isLoading={chatLoading}
+                    onNewChat={handleChatNewChat}
+                    onScrollStateChange={handleChatScrollState}
+                  />
+                  <div className="fixed bottom-2 sm:bottom-3 left-0 right-0 z-20 px-2 sm:px-4 flex justify-center">
+                    <div className="w-full max-w-[820px] relative">
+                      <button
+                        type="button"
+                        onClick={() => chatScrollFn.current?.()}
+                        className={`absolute -top-13 right-2 sm:right-4 z-30 flex items-center justify-center w-10 h-10 rounded-full bg-[#1e2736]/90 hover:bg-[#2b384d] border border-slate-700/80 text-amber-400 hover:text-amber-300 shadow-2xl backdrop-blur-md transition-all duration-300 ease-out active:scale-90 ${
+                          chatCanScroll ? 'opacity-100 translate-y-0 pointer-events-auto scale-100' : 'opacity-0 translate-y-2 pointer-events-none scale-90'
+                        }`}
+                        aria-label="Défiler vers le bas"
+                      >
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          <line x1="12" y1="5" x2="12" y2="19" />
+                          <polyline points="19 12 12 19 5 12" />
+                        </svg>
+                      </button>
+
+                      <ChatBox
+                        variant="compact"
+                        inputMessage={chatInput}
+                        setInputMessage={setChatInput}
+                        onSend={handleChatSend}
+                        webSearch={chatWebSearch}
+                        setWebSearch={setChatWebSearch}
+                        imageMode={chatImageMode}
+                        setImageMode={setChatImageMode}
+                        onOpenSettings={() => setChatSettingsOpen(true)}
+                        attachedFiles={chatAttachedFiles}
+                        setAttachedFiles={setChatAttachedFiles}
+                      />
+                    </div>
+                  </div>
+                </main>
+              )}
+            </>
+          )}
+        </>
       )}
 
-      {/* Persistent Bottom Navigation Bar - visible on Hub and Profile tabs */}
+      {/* ─────────────────── AGENT DELMAS / CONSTRUCTEUR ─────────────────── */}
+      {activeTab === 'constructeur' && (
+        <>
+          {/* Own sidebar for Agent Delmas section */}
+          <Sidebar
+            isOpen={agentSidebarOpen}
+            onClose={() => setAgentSidebarOpen(false)}
+            onSelectChat={handleAgentSelectProject}
+            onNewChat={handleAgentNewProject}
+            onOpenSettings={() => { setAgentSidebarOpen(false); setAgentSettingsOpen(true); }}
+            activeChatTitle={agentTitle}
+            isConstructeurMode={true}
+            onOpenConstructeur={handleAgentNewProject}
+            constructeurProjects={constructeurProjects}
+          />
+
+          {/* Own settings modal for Agent Delmas section */}
+          <SettingsModal
+            isOpen={agentSettingsOpen}
+            onClose={() => setAgentSettingsOpen(false)}
+            systemInstruction={agentSystemInstruction}
+            setSystemInstruction={setAgentSystemInstruction}
+            webSearch={agentWebSearch}
+            setWebSearch={setAgentWebSearch}
+            imageMode={agentImageMode}
+            setImageMode={setAgentImageMode}
+          />
+
+          <CustomAgentView
+            agentName={agentTitle}
+            userName="DIBI Kouassi delmas..."
+            messages={agentMessages}
+            isLoading={agentLoading}
+            inputMessage={agentInput}
+            setInputMessage={setAgentInput}
+            onSend={handleAgentSend}
+            onOpenMenu={() => setAgentSidebarOpen(true)}
+            onBackToHub={() => setActiveTab('hub')}
+            onNewChat={handleAgentNewProject}
+            webSearch={agentWebSearch}
+            setWebSearch={setAgentWebSearch}
+            imageMode={agentImageMode}
+            setImageMode={setAgentImageMode}
+            onOpenSettings={() => setAgentSettingsOpen(true)}
+            attachedFiles={agentAttachedFiles}
+            setAttachedFiles={setAgentAttachedFiles}
+          />
+        </>
+      )}
+
+      {/* ─────────────────────────── PROFILE ─────────────────────────────── */}
+      {activeTab === 'profile' && (
+        <>
+          {/* Own settings modal for Profile section */}
+          <SettingsModal
+            isOpen={profileSettingsOpen}
+            onClose={() => setProfileSettingsOpen(false)}
+            systemInstruction={profileSystemInstruction}
+            setSystemInstruction={setProfileSystemInstruction}
+            webSearch={profileWebSearch}
+            setWebSearch={setProfileWebSearch}
+            imageMode={profileImageMode}
+            setImageMode={setProfileImageMode}
+          />
+          <ProfileView
+            onOpenSettings={() => setProfileSettingsOpen(true)}
+            webSearch={profileWebSearch}
+            setWebSearch={setProfileWebSearch}
+            imageMode={profileImageMode}
+            setImageMode={setProfileImageMode}
+            onClearHistory={() => {}}
+            systemInstruction={profileSystemInstruction}
+          />
+        </>
+      )}
+
+      {/* Bottom nav — visible on Hub and Profile only */}
       {(activeTab === 'hub' || activeTab === 'profile') && (
         <BottomNav
           activeTab={activeTab}
-          onSelectTab={(tab) => {
-            setActiveTab(tab);
-            if (tab === 'constructeur') {
-              setMode('constructeur');
-              if (!activeChatTitle || activeChatTitle === "Créateur d'Agents") {
-                setActiveChatTitle("Agent Delmas");
-              }
-            } else {
-              setMode('chat');
-            }
-          }}
+          onSelectTab={(tab) => setActiveTab(tab)}
         />
       )}
     </div>
