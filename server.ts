@@ -48,11 +48,11 @@ async function startServer() {
         })),
       ];
 
-      // Model priority list — all available on OpenRouter
+      // Model priority list — free tier on OpenRouter (suffix :free)
       const modelsToTry = [
-        'google/gemini-2.5-flash',
-        'google/gemini-2.0-flash-001',
-        'openai/gpt-4o-mini',
+        'google/gemini-2.5-flash:free',
+        'deepseek/deepseek-chat:free',
+        'meta-llama/llama-3.3-70b-instruct:free',
       ];
 
       let replyText = '';
