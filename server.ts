@@ -2,7 +2,6 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
-import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -16,23 +15,7 @@ async function startServer() {
 
   app.use(express.json({ limit: '10mb' }));
 
-  // Initialize Gemini client lazily/safely
-  const getGeminiClient = () => {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      return null;
-    }
-    return new GoogleGenAI({
-      apiKey,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        },
-      },
-    });
-  };
-
-  // API endpoint for AI Chat
+  // API endpoint for AI Chat — powered by OpenRouter
   app.post('/api/chat', async (req, res) => {
     try {
       const { messages, webSearch, imageMode, systemInstruction } = req.body;
@@ -42,72 +25,86 @@ async function startServer() {
         return;
       }
 
-      const ai = getGeminiClient();
+      const apiKey = process.env.GEMINI_API_KEY;
 
-      // If no API key set or gemini fails, produce intelligent fallback response
-      if (!ai) {
+      // Fallback demo mode when no key is set
+      if (!apiKey) {
         const lastMessage = messages[messages.length - 1]?.content || '';
-        const fallbackReply = `[Demo Assistant Mode] Merci pour votre message : "${lastMessage}". Je suis votre assistant Delmas. Pour débloquer les réponses en direct par Gemini, configurez votre clé GEMINI_API_KEY dans le panneau Secrets.`;
-        res.json({ text: fallbackReply, sources: [] });
+        res.json({
+          text: `[Demo Assistant Mode] Merci pour votre message : "${lastMessage}". Je suis votre assistant Delmas. Pour débloquer les réponses en direct, configurez votre clé GEMINI_API_KEY (OpenRouter) dans le panneau Secrets.`,
+          sources: [],
+        });
         return;
       }
 
-      const historyFormatted = messages.map((m: { role: string; content: string }) => ({
-        role: m.role === 'user' ? 'user' : 'model',
-        parts: [{ text: m.content }],
-      }));
+      const systemMsg = systemInstruction ||
+        "Tu es Delmas, un assistant intelligent, chaleureux, polyvalent et concis. Réponds clairement dans la langue de l'utilisateur (Français ou Anglais selon sa demande). Utilise du markdown élégant pour les réponses structurées.";
 
-      const config: any = {
-        systemInstruction:
-          systemInstruction ||
-          'Tu es Delmas, un assistant intelligent, chaleureux, polyvalent et concis. Réponds clairement dans la langue de l\'utilisateur (Français ou Anglais selon sa demande). Utilise du markdown élégant pour les réponses structurées.',
-      };
+      const openRouterMessages = [
+        { role: 'system', content: systemMsg },
+        ...messages.map((m: { role: string; content: string }) => ({
+          role: m.role === 'user' ? 'user' : 'assistant',
+          content: m.content,
+        })),
+      ];
 
-      if (webSearch) {
-        config.tools = [{ googleSearch: {} }];
-      }
+      // Model priority list — all available on OpenRouter
+      const modelsToTry = [
+        'google/gemini-2.5-flash',
+        'google/gemini-2.0-flash-001',
+        'openai/gpt-4o-mini',
+      ];
 
-      const modelsToTry = ['gemini-3.6-flash', 'gemini-2.5-flash', 'gemini-1.5-flash'];
-      let response: any = null;
+      let replyText = '';
       let lastErr: any = null;
 
-      for (const modelName of modelsToTry) {
+      for (const model of modelsToTry) {
         try {
-          response = await ai.models.generateContent({
-            model: modelName,
-            contents: historyFormatted,
-            config,
+          const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${apiKey}`,
+              'Content-Type': 'application/json',
+              'HTTP-Referer': process.env.APP_URL || 'https://replit.com',
+              'X-Title': 'Delmas AI',
+            },
+            body: JSON.stringify({
+              model,
+              messages: openRouterMessages,
+            }),
           });
-          if (response) break;
+
+          if (!response.ok) {
+            const errBody = await response.text();
+            console.warn(`Model ${model} failed (${response.status}):`, errBody);
+            lastErr = new Error(`HTTP ${response.status}: ${errBody}`);
+            // Don't retry on auth errors
+            if (response.status === 401 || response.status === 403) break;
+            continue;
+          }
+
+          const data = await response.json();
+          replyText = data.choices?.[0]?.message?.content || '';
+          if (replyText) break;
         } catch (mErr: any) {
-          console.warn(`Model ${modelName} failed:`, mErr?.message);
+          console.warn(`Model ${model} error:`, mErr?.message);
           lastErr = mErr;
         }
       }
 
-      if (!response) {
+      if (!replyText) {
         const errMsg = lastErr?.message || '';
         if (errMsg.includes('429') || errMsg.includes('quota') || errMsg.includes('RESOURCE_EXHAUSTED')) {
           res.json({
-            text: "⚠️ Le quota temporaire de l'API est atteint (Rate Limit). Vos demandes reprendront automatiquement dans ~45 secondes. N'hésitez pas à réimporter votre message dans un instant.",
+            text: "⚠️ Le quota temporaire de l'API est atteint. Réessayez dans ~45 secondes.",
             sources: [],
           });
           return;
         }
-        throw lastErr || new Error('All models failed to generate a response');
+        throw lastErr || new Error('All models failed');
       }
 
-      const replyText = response.text || "Désolé, je n'ai pas pu générer de réponse.";
-      
-      // Extract grounding sources if web search was enabled
-      const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
-      const sources = groundingChunks
-        ? groundingChunks
-            .map((chunk: any) => chunk.web)
-            .filter((web: any) => web && web.uri)
-        : [];
-
-      res.json({ text: replyText, sources });
+      res.json({ text: replyText, sources: [] });
     } catch (err: any) {
       console.error('Error in /api/chat:', err);
       res.status(500).json({
