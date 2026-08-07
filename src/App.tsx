@@ -269,17 +269,57 @@ export default function App() {
   // ═══════════════════════════════════════════════════════════════════════════
   // NAV HELPERS
   // ═══════════════════════════════════════════════════════════════════════════
+
+  // Called by Hub assistant cards — opens Chat with specific agent/options
   const openChatFromHub = (agentName?: string, options?: { webSearch?: boolean; imageMode?: boolean }) => {
     if (agentName) setChatActiveName(agentName);
+    // Only apply Hub-requested options; never touch other sections
     if (options?.webSearch  !== undefined) setChatWebSearch(options.webSearch);
     if (options?.imageMode  !== undefined) setChatImageMode(options.imageMode);
+    setChatAttachedFilesRaw([]);
+    setChatSidebarOpen(false);
     setActiveTab('chat');
   };
 
+  // Called by Hub "Créer un assistant" — opens Agent fresh
   const openConstructeurFromHub = () => {
     setCurrentProjectId(null);
     setAgentAttachedFilesRaw([]);
+    setAgentSidebarOpen(false);
     setActiveTab('constructeur');
+  };
+
+  // Called by BottomNav — each section gets a completely clean isolated state
+  const handleNavTabChange = (tab: 'hub' | 'chat' | 'constructeur' | 'profile') => {
+    if (tab === 'chat') {
+      // Full reset — Chat section starts fresh from BottomNav
+      setChatActiveName('Delmas AI');
+      setChatWebSearch(false);
+      setChatImageMode(false);
+      setChatAttachedFilesRaw([]);
+      setChatSidebarOpen(false);
+      setChatSettingsOpen(false);
+      setChatLibraryOpen(false);
+      setChatSearchOpen(false);
+    }
+    if (tab === 'constructeur') {
+      // Full reset — Agent section starts fresh from BottomNav
+      setCurrentProjectId(null);
+      setAgentWebSearch(false);
+      setAgentImageMode(false);
+      setAgentAttachedFilesRaw([]);
+      setAgentSidebarOpen(false);
+      setAgentSettingsOpen(false);
+    }
+    if (tab === 'hub') {
+      setHubSidebarOpen(false);
+    }
+    if (tab === 'profile') {
+      setProfileSettingsOpen(false);
+      setProfileWebSearch(false);
+      setProfileImageMode(false);
+    }
+    setActiveTab(tab);
   };
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -345,9 +385,10 @@ export default function App() {
             onSelectChat={handleChatSelectTopic}
           />
 
-          {/* Custom agent (blue robot agents) */}
+          {/* Custom agent (blue robot assistants) — key forces isolated DOM per assistant */}
           {isCustomAgentChat ? (
             <CustomAgentView
+              key={`chat-assistant-${chatActiveName}`}
               agentName={chatActiveName}
               userName="DIBI Kouassi delmas..."
               messages={chatMessages}
@@ -409,6 +450,7 @@ export default function App() {
 
                   <div className="chat-container relative z-10 flex flex-col justify-end w-full max-w-[820px] mb-1 sm:mb-2">
                     <ChatBox
+                      key="chat-landing-box"
                       variant="compact"
                       inputMessage={chatInput}
                       setInputMessage={setChatInput}
@@ -449,6 +491,7 @@ export default function App() {
                       </button>
 
                       <ChatBox
+                        key="chat-thread-box"
                         variant="compact"
                         inputMessage={chatInput}
                         setInputMessage={setChatInput}
@@ -498,7 +541,9 @@ export default function App() {
             setImageMode={setAgentImageMode}
           />
 
+          {/* key forces isolated DOM instance — never shares state with Chat section */}
           <CustomAgentView
+            key={`agent-delmas-${agentKey}`}
             agentName={agentTitle}
             userName="DIBI Kouassi delmas..."
             messages={agentMessages}
@@ -550,7 +595,7 @@ export default function App() {
       {(activeTab === 'hub' || activeTab === 'profile') && (
         <BottomNav
           activeTab={activeTab}
-          onSelectTab={(tab) => setActiveTab(tab)}
+          onSelectTab={handleNavTabChange}
         />
       )}
     </div>
