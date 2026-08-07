@@ -3,7 +3,7 @@ import Background from './components/Background';
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
 import ChatBox from './components/ChatBox';
-import SettingsModal from './components/SettingsModal';
+import SettingsModal, { SharedSettings, DEFAULT_SHARED_SETTINGS } from './components/SettingsModal';
 import LibraryModal from './components/LibraryModal';
 import SearchModal from './components/SearchModal';
 import ChatThread, { ChatMessage } from './components/ChatThread';
@@ -57,6 +57,12 @@ export default function App() {
   // TOP-LEVEL TAB  (navigation only – no chat state shared here)
   // ═══════════════════════════════════════════════════════════════════════════
   const [activeTab, setActiveTab] = useState<'hub' | 'chat' | 'constructeur' | 'profile'>('hub');
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // GLOBAL SHARED SETTINGS  (persists across all sections — not per-section)
+  // userName, theme, accentColor, language, memories are global user prefs.
+  // ═══════════════════════════════════════════════════════════════════════════
+  const [sharedSettings, setSharedSettings] = useState<SharedSettings>(DEFAULT_SHARED_SETTINGS);
 
   // ═══════════════════════════════════════════════════════════════════════════
   // SECTION 1 — HUB  (agents list, no chat state)
@@ -377,6 +383,8 @@ export default function App() {
             setWebSearch={setChatWebSearch}
             imageMode={chatImageMode}
             setImageMode={setChatImageMode}
+            shared={sharedSettings}
+            setShared={setSharedSettings}
           />
           <LibraryModal isOpen={chatLibraryOpen} onClose={() => setChatLibraryOpen(false)} />
           <SearchModal
@@ -539,6 +547,8 @@ export default function App() {
             setWebSearch={setAgentWebSearch}
             imageMode={agentImageMode}
             setImageMode={setAgentImageMode}
+            shared={sharedSettings}
+            setShared={setSharedSettings}
           />
 
           {/* key forces isolated DOM instance — never shares state with Chat section */}
@@ -578,6 +588,8 @@ export default function App() {
             setWebSearch={setProfileWebSearch}
             imageMode={profileImageMode}
             setImageMode={setProfileImageMode}
+            shared={sharedSettings}
+            setShared={setSharedSettings}
           />
           <ProfileView
             onOpenSettings={() => setProfileSettingsOpen(true)}

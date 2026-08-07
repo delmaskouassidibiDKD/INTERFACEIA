@@ -1,14 +1,39 @@
 import React, { useState } from 'react';
 
+// ─── Shared settings type (persisted in App.tsx, passed as props) ─────────────
+export interface SharedSettings {
+  userName: string;
+  theme: string;
+  accentColor: string;
+  language: string;
+  memories: string[];
+}
+
+export const DEFAULT_SHARED_SETTINGS: SharedSettings = {
+  userName: 'Dibi Delmas',
+  theme: 'Système (par défaut)',
+  accentColor: 'Par défaut',
+  language: 'français',
+  memories: [
+    'Préfère les réponses directes et bien structurées',
+    "Développeur d'applications web et mobile",
+    'Langue principale : Français',
+  ],
+};
+
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
+  // Per-section state (isolated per section)
   systemInstruction: string;
   setSystemInstruction: (val: string) => void;
   webSearch: boolean;
   setWebSearch: (val: boolean) => void;
   imageMode: boolean;
   setImageMode: (val: boolean) => void;
+  // Global shared state (same across all sections, persists on navigation)
+  shared: SharedSettings;
+  setShared: (val: SharedSettings) => void;
 }
 
 type SubView = 'main' | 'personnalisation' | 'memoire' | 'plugins' | 'theme' | 'color' | 'language';
@@ -20,21 +45,23 @@ export default function SettingsModal({
   setSystemInstruction,
   webSearch,
   setWebSearch,
+  shared,
+  setShared,
 }: SettingsModalProps) {
   const [activeSubView, setActiveSubView] = useState<SubView>('main');
-  const [userName, setUserName] = useState('Dibi Delmas');
   const [isEditingName, setIsEditingName] = useState(false);
-  const [theme, setTheme] = useState('Système (par défaut)');
-  const [accentColor, setAccentColor] = useState('Par défaut');
-  const [language, setLanguage] = useState('français');
-  const [memories, setMemories] = useState<string[]>([
-    'Préfère les réponses directes et bien structurées',
-    'Développeur d’applications web et mobile',
-    'Langue principale : Français',
-  ]);
   const [newMemory, setNewMemory] = useState('');
 
   if (!isOpen) return null;
+
+  // Helpers that update shared state
+  const setUserName   = (v: string)   => setShared({ ...shared, userName: v });
+  const setTheme      = (v: string)   => setShared({ ...shared, theme: v });
+  const setAccentColor = (v: string)  => setShared({ ...shared, accentColor: v });
+  const setLanguage   = (v: string)   => setShared({ ...shared, language: v });
+  const setMemories   = (v: string[]) => setShared({ ...shared, memories: v });
+
+  const { userName, theme, accentColor, language, memories } = shared;
 
   const handleClose = () => {
     setActiveSubView('main');
